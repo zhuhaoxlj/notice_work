@@ -1,8 +1,9 @@
 # 目前只适配了 Mac OS
 # 测试平台：Mac OS 14.0
 # Python 版本：3.11.4
-# todo 我正在完成任务的时候不要弹出
-# todo 加入判断当前cookies是否生效，如果失效了提醒登录获取cookies
+# TODO 我正在完成任务的时候不要弹出
+# TODO 加入判断当前cookies是否生效，如果失效了提醒登录获取cookies
+# TODO 如果这次的数据和上次的不一样才提醒，午休时间不提醒，延后提醒
 import threading
 import tkinter as tk
 from pynput import keyboard
@@ -21,6 +22,8 @@ import sys
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton
 from PySide6.QtCore import Qt  # 导入 Qt 模块
 
+cookies = ""
+
 class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -33,8 +36,9 @@ class LoginWindow(QWidget):
         # 创建用户名标签和输入框
         self.username_label = QLabel("用户名:")
         self.username_entry = QLineEdit()
-         # 设置输入法为数字和英文
-        self.username_entry.setInputMethodHints(Qt.ImhDigitsOnly | Qt.ImhPreferLatin)
+        # 设置输入法为数字和英文
+        self.username_entry.setInputMethodHints(
+            Qt.ImhDigitsOnly | Qt.ImhPreferLatin)
         layout.addWidget(self.username_label)
         layout.addWidget(self.username_entry)
 
@@ -42,7 +46,8 @@ class LoginWindow(QWidget):
         self.password_label = QLabel("密码:")
         self.password_entry = QLineEdit()
         # 设置输入法为数字和英文
-        self.password_entry.setInputMethodHints(Qt.ImhDigitsOnly | Qt.ImhPreferLatin)
+        self.password_entry.setInputMethodHints(
+            Qt.ImhDigitsOnly | Qt.ImhPreferLatin)
         self.password_entry.setEchoMode(QLineEdit.Password)  # 使密码框显示星号
         layout.addWidget(self.password_label)
         layout.addWidget(self.password_entry)
@@ -52,21 +57,21 @@ class LoginWindow(QWidget):
         self.login_button.clicked.connect(self.on_login_button_click)
         layout.addWidget(self.login_button)
         self.setLayout(layout)
-         # 设置窗口顶置
+        # 设置窗口顶置
         self.setWindowFlags(Qt.WindowStaysOnTopHint)
         # self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         # 将密码输入框的回车键绑定到登录按钮的点击事件
         self.password_entry.returnPressed.connect(self.login_button.click)
 
-
     def on_login_button_click(self):
         # 获取用户名和密码输入框的文本
         username = self.username_entry.text()
         password = self.password_entry.text()
-
+        login_get_cookie(username, password)
         # 打印用户名和密码
         # print("用户名:", username)
         # print("密码:", password)
+
 
 def main():
     # 检查是否已经存在 QApplication 实例
@@ -75,9 +80,8 @@ def main():
         # 销毁现有的 QApplication 实例
         existing_instance.quit()
 
-    
     app = QApplication.instance()
-    if app is None: 
+    if app is None:
         app = QApplication(sys.argv)
     window = LoginWindow()
     window.show()
@@ -91,6 +95,7 @@ file_name = "work_data.json"
 
 def login_get_cookie(username, password):
     url = 'http://wss.gkoudai.com/index.php?m=user&f=login'
+    global cookies
     cookies = browser_cookie3.chrome(domain_name='wss.gkoudai.com')
     # 创建一个session,作用会自动保存cookie
     session = requests.session()
@@ -139,7 +144,9 @@ def login():
 def do_request():
     # 定义要发送的Cookie
     # cookies = json.loads(config('COOKIES'))
-    cookies = string_to_dict(config('COOKIES_FROM_BROWSER'))
+    global cookies
+    if cookies == None or cookies == "":
+        cookies = string_to_dict(config('COOKIES_FROM_BROWSER'))
     # 定义目标网址
     url = 'http://wss.gkoudai.com/index.php?m=my&f=index'
 
@@ -150,12 +157,17 @@ def do_request():
 
 
 def analyse_html(html_body):
+    global cookies
     # 使用Beautiful Soup解析HTML
     soup = BeautifulSoup(html_body, 'html.parser')
-
     # 查找相应的元素并提取数据
-    my_tasks = soup.find("div", class_="tile-title",
-                         string="我的任务").find_next_sibling("div", class_="tile-amount").text.strip()
+    soup_tile_title = soup.find("div", class_="tile-title", string="我的任务")
+    if soup_tile_title == None:
+        cookies = login_get_cookie(config('USERNAME'),config('PASSWORD'))
+        print("登录过期，已经重新登录")
+        return analyse_html(do_request())
+        return
+    my_tasks = soup_tile_title.find_next_sibling("div", class_="tile-amount").text.strip()
     my_bugs = soup.find("div", class_="tile-title",
                         string="我的BUG").find_next_sibling("div", class_="tile-amount").text.strip()
     my_requirements = soup.find(
@@ -169,6 +181,7 @@ def analyse_html(html_body):
     data['my_requirements'] = my_requirements
     data['unclosed_projects'] = unclosed_projects
     return data
+
 
 
 def write_data_to_local(data):
@@ -218,9 +231,12 @@ class MyStatusBarApp(rumps.App):
     def get_notice(self, _):
         response = do_request()
         work_data = analyse_html(response)
-        # 第一次启动逻辑判断
-        if work_data['my_tasks'] != "0" or work_data['my_bugs'] != "0" or work_data['my_requirements'] != "0":
-            show_notice(work_data)
+        # 第一次启动逻辑判断 这段代码会执行两次
+        # if work_data['my_tasks'] != "0" or work_data['my_bugs'] != "0" or work_data['my_requirements'] != "0":
+        #     show_notice(work_data)
+
+
+
         # 数据持久化
         write_data_to_local(work_data)
         show_notice(work_data)
@@ -234,6 +250,7 @@ class MyStatusBarApp(rumps.App):
         while self.is_running:
             response = do_request()
             work_data = analyse_html(response)
+            print(work_data)
             # 第一次启动逻辑判断
             if work_data['my_tasks'] != "0" or work_data['my_bugs'] != "0" or work_data['my_requirements'] != "0":
                 show_notice(work_data)
