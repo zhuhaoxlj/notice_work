@@ -11,7 +11,7 @@ from pynput import keyboard
 from bs4 import BeautifulSoup
 from pync import Notifier
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import rumps
 import json
 import time
@@ -151,6 +151,7 @@ def do_request():
         cookies = os.getenv("COOKIES", "")
         if (cookies != ""):
             cookies = json.loads(cookies.replace("'", "\""))
+            print(cookies)
     # 定义目标网址
     url = 'http://wss.gkoudai.com/index.php?m=my&f=index'
 
@@ -167,9 +168,9 @@ def analyse_html(html_body):
     # 查找相应的元素并提取数据
     soup_tile_title = soup.find("div", class_="tile-title", string="我的任务")
     if soup_tile_title == None:
-        cookies = login_get_cookie(config('USERNAME'), config('PASSWORD'))
+        cookies = login_get_cookie(os.getenv('USERNAME'), os.getenv('PASSWORD'))
         # 更新 cookies
-        config.set('COOKIES', cookies)
+        set_key(".env",'COOKIES', str(cookies))
         print("登录过期，已经重新登录")
         return analyse_html(do_request())
     my_tasks = soup_tile_title.find_next_sibling(
