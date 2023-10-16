@@ -5,11 +5,13 @@
 # TODO 加入判断当前cookies是否生效，如果失效了提醒登录获取cookies
 # TODO 如果这次的数据和上次的不一样才提醒，午休时间不提醒，延后提醒
 import threading
+from collections import Counter
 import tkinter as tk
 from pynput import keyboard
 from bs4 import BeautifulSoup
 from pync import Notifier
-from decouple import config
+import os
+from dotenv import load_dotenv
 import rumps
 import json
 import time
@@ -23,6 +25,11 @@ from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineE
 from PySide6.QtCore import Qt  # 导入 Qt 模块
 
 cookies = ""
+data = dict()
+file_name = "work_data.json"
+is_first_init = True
+# 加载.env文件
+load_dotenv()
 
 class LoginWindow(QWidget):
     def __init__(self):
@@ -89,10 +96,6 @@ def main():
     sys.exit(app.exec())
 
 
-data = dict()
-file_name = "work_data.json"
-
-
 def login_get_cookie(username, password):
     url = 'http://wss.gkoudai.com/index.php?m=user&f=login'
     global cookies
@@ -143,10 +146,11 @@ def login():
 
 def do_request():
     # 定义要发送的Cookie
-    # cookies = json.loads(config('COOKIES'))
     global cookies
     if cookies == None or cookies == "":
-        cookies = string_to_dict(config('COOKIES_FROM_BROWSER'))
+        cookies = os.getenv("COOKIES", "")
+        if (cookies != ""):
+            cookies = json.loads(cookies.replace("'", "\""))
     # 定义目标网址
     url = 'http://wss.gkoudai.com/index.php?m=my&f=index'
 
@@ -163,11 +167,13 @@ def analyse_html(html_body):
     # 查找相应的元素并提取数据
     soup_tile_title = soup.find("div", class_="tile-title", string="我的任务")
     if soup_tile_title == None:
-        cookies = login_get_cookie(config('USERNAME'),config('PASSWORD'))
+        cookies = login_get_cookie(config('USERNAME'), config('PASSWORD'))
+        # 更新 cookies
+        config.set('COOKIES', cookies)
         print("登录过期，已经重新登录")
         return analyse_html(do_request())
-        return
-    my_tasks = soup_tile_title.find_next_sibling("div", class_="tile-amount").text.strip()
+    my_tasks = soup_tile_title.find_next_sibling(
+        "div", class_="tile-amount").text.strip()
     my_bugs = soup.find("div", class_="tile-title",
                         string="我的BUG").find_next_sibling("div", class_="tile-amount").text.strip()
     my_requirements = soup.find(
@@ -181,7 +187,6 @@ def analyse_html(html_body):
     data['my_requirements'] = my_requirements
     data['unclosed_projects'] = unclosed_projects
     return data
-
 
 
 def write_data_to_local(data):
@@ -198,7 +203,15 @@ def read_data_from_local(file_name):
 
 def check_and_notify():
     response = do_request()
-    analyse_html(response)
+    new_data = analyse_html(response)
+    old_data = read_data_from_local(file_name)
+    print("old_data---", old_data)
+    print("new_data---", new_data)
+    # 如果远程数据有更新才通知
+    if Counter(new_data) != Counter(old_data):
+        # 数据持久化
+        write_data_to_local(new_data)
+        show_notice(new_data)
 
 
 def show_notice(data):
@@ -215,31 +228,23 @@ class MyStatusBarApp(rumps.App):
                      rumps.MenuItem("立即获取禅道信息", callback=self.get_notice),
                      rumps.MenuItem("登录获取 cookies", callback=self.login_get_cookies)]
         self.loop_thread = None
+        # 是否已开启监听，当值为 false 时退出程序循环监听
         self.is_running = False
+        self.start_listening(None)
 
     def login_get_cookies(self, _):
         # print(123)
         main()
 
     def start_listening(self, _):
-        # print("自动获取禅道信息已开启...")
+        print("自动获取禅道信息已开启...")
         if not self.is_running:
             self.is_running = True
             self.loop_thread = threading.Thread(target=self.run_loop)
             self.loop_thread.start()
 
     def get_notice(self, _):
-        response = do_request()
-        work_data = analyse_html(response)
-        # 第一次启动逻辑判断 这段代码会执行两次
-        # if work_data['my_tasks'] != "0" or work_data['my_bugs'] != "0" or work_data['my_requirements'] != "0":
-        #     show_notice(work_data)
-
-
-
-        # 数据持久化
-        write_data_to_local(work_data)
-        show_notice(work_data)
+        check_and_notify()
 
     def stop_listening(self, _):
         self.is_running = False
@@ -247,17 +252,13 @@ class MyStatusBarApp(rumps.App):
             self.loop_thread.join()
 
     def run_loop(self):
+        global is_first_init
         while self.is_running:
-            response = do_request()
-            work_data = analyse_html(response)
-            print(work_data)
             # 第一次启动逻辑判断
-            if work_data['my_tasks'] != "0" or work_data['my_bugs'] != "0" or work_data['my_requirements'] != "0":
-                show_notice(work_data)
-            # 数据持久化
-            write_data_to_local(work_data)
-            # 等待5分钟
-            time.sleep(300)
+            if is_first_init:
+                check_and_notify()
+                is_first_init = False
+            time.sleep(5)
 
 
 if __name__ == "__main__":
